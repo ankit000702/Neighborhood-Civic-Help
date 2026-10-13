@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Neighborhood Civic Help</title><link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<header><h1>Neighborhood Civic Help</h1><select id="lang" aria-label="Language"><option value="en">English</option><option value="hi">हिन्दी</option><option value="mr">मराठी</option></select></header>
+<main id="app"><div class="card">Loading…</div></main>
+<script>
+const $=s=>document.querySelector(s);
+let currentUser=null, isAdmin=false, currentView='login', locationCoords=null;
+const escapeHtml=s=>String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function api(url, options={}) {
+  const res=await fetch(url,{credentials:'same-origin',...options});
+  const ct=res.headers.get('content-type')||'';
+  if(ct.includes('application/json')) {const data=await res.json(); if(!res.ok) throw new Error(data.error||'Something went wrong'); return data;}
+  if(!res.ok) throw new Error('Request failed'); return res;
+}
+function post(url,data){return api(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)});}
+function showError(id,msg){const el=$(id);if(el)el.textContent=msg;}
+function shell(content){$('#app').innerHTML=content;}
+async function start(){
+ try{const s=await api('/api/session');currentUser=s.user;isAdmin=s.is_admin;currentView=isAdmin?'admin':currentUser?'home':'login';}
+ catch(e){currentView='login'}
+ render();
+}
+function render(){
+ if(currentView==='login') return loginView();
+ if(currentView==='home') return homeView();
+ if(currentView==='report') return reportView();
+ if(currentView==='feedback') return feedbackView();
+ if(currentView==='adminLogin') return adminLoginView();
+ if(currentView==='admin') return adminView();
+ loginView();
+}
+function loginView(){shell(`<div class="card"><h2>Welcome · Login</h2><p class="mu">Sign in to report a neighborhood problem or share feedback.</p><label>Full name</label><input id="name" autocomplete="name" maxlength="100" placeholder="Enter your full name"><label>Contact number (10 digits)</label><input id="phone" inputmode="numeric" maxlength="10" placeholder="Mobile number"><p id="err" class="err"></p><button id="loginBtn">Continue</button><button class="alt" id="adminLink">Admin</button></div>`);
+ $('#loginBtn').onclick=async()=>{try{const r=await post('/api/login',{name:$('#name').value.trim(),phone:$('#phone').value.trim()});currentUser=r.user;currentView='home';render()}catch(e){showError('#err',e.message)}};
+ $('#adminLink').onclick=()=>{currentView='adminLogin';render()};
+}
+function homeView(){shell(`<div class="card"><h2>Welcome, ${escapeHtml(currentUser?.name||'Neighbor')}!</h2><p>What would you like to do?</p><div class="grid"><button id="reportBtn">📍 Report a problem</button><button class="alt" id="feedbackBtn">💬 Feedback / thank-you note</button></div><p class="small">Your browser will ask permission to share your current location when you open the report form.</p><button class="alt" id="logoutBtn">Logout</button><button class="alt" id="adminLink">Admin</button></div>`);
+ $('#reportBtn').onclick=()=>{currentView='report';locationCoords=null;reportView();fetchLocation()};
+ $('#feedbackBtn').onclick=()=>{currentView='feedback';render()};
+ $('#logoutBtn').onclick=async()=>{await api('/api/logout',{method:'POST'});currentUser=null;currentView='login';render()};
+ $('#adminLink').onclick=()=>{currentView='adminLogin';render()};
+}
+function reportView(){shell(`<div class="card"><h2>Report a problem</h2><p class="mu">Enter the area and issue. Location is fetched from your device with your permission.</p><form id="reportForm"><label>Area / locality</label><input id="area" maxlength="180" required placeholder="e.g. YK Nagar, Virar West"><label>What is the problem?</label><textarea id="problem" maxlength="3000" required placeholder="Describe the pothole, damaged footpath, garbage, streetlight, etc."></textarea><label>Photo of the problem (optional)</label><input id="photo" type="file" accept="image/jpeg,image/png,image/webp" capture="environment"><p class="small">JPG, PNG or WEBP · maximum 8 MB</p><div class="item"><b>📍 Current location</b><div id="locStatus" class="mu">Trying to fetch location…</div><button type="button" class="alt" id="retryLoc">Retry location</button></div><p id="err" class="err"></p><button id="submitBtn" type="submit">Submit report</button><button type="button" class="alt" id="backBtn">Back</button></form></div>`);
+ $('#retryLoc').onclick=fetchLocation;$('#backBtn').onclick=()=>{currentView='home';render()};
+ $('#reportForm').onsubmit=async e=>{e.preventDefault();showError('#err','');const fd=new FormData();fd.append('area',$('#area').value);fd.append('problem',$('#problem').value);if($('#photo').files[0])fd.append('photo',$('#photo').files[0]);if(locationCoords){fd.append('latitude',locationCoords.latitude);fd.append('longitude',locationCoords.longitude)}
+ const b=$('#submitBtn');b.disabled=true;b.textContent='Submitting…';
+ try{await api('/api/report',{method:'POST',body:fd});shell(`<div class="card"><h2 class="ok">Report submitted</h2><p>Thank you! Your problem has been registered.</p><button id="homeBtn">Back to home</button></div>`);$('#homeBtn').onclick=()=>{currentView='home';render()}}
+ catch(err){showError('#err',err.message);b.disabled=false;b.textContent='Submit report'}
+ };
+}
+function fetchLocation(){
+ const el=$('#locStatus'); if(!el)return;
+ if(!navigator.geolocation){el.textContent='This browser does not support location. You can still submit the report without coordinates.';return}
+ el.textContent='Requesting location permission…';
+ navigator.geolocation.getCurrentPosition(pos=>{locationCoords={latitude:pos.coords.latitude,longitude:pos.coords.longitude};el.innerHTML=`<span class="ok">Location fetched successfully.</span><br><span class="small">${pos.coords.latitude.toFixed(6)}, ${pos.coords.longitude.toFixed(6)}</span>`},
+ err=>{locationCoords=null;el.textContent=err.code===1?'Location permission denied. Allow it in browser settings and tap Retry.':'Could not fetch location. Check GPS/location settings and tap Retry. (You may still submit without it.)'},
+ {enableHighAccuracy:true,timeout:12000,maximumAge:30000});
+}
+function feedbackView(){shell(`<div class="card"><h2>Feedback / thank-you note</h2><label>Feedback type</label><select id="kind"><option value="good">Thank you / positive feedback</option><option value="not_solved">Problem not solved</option><option value="suggestion">Suggestion</option></select><label>Your message</label><textarea id="message" maxlength="3000" placeholder="Write your feedback…" required></textarea><p id="err" class="err"></p><button id="sendBtn">Submit feedback</button><button class="alt" id="backBtn">Back</button></div>`);
+ $('#backBtn').onclick=()=>{currentView='home';render()};$('#sendBtn').onclick=async()=>{try{await post('/api/feedback',{kind:$('#kind').value,message:$('#message').value.trim()});shell(`<div class="card"><h2 class="ok">Feedback saved</h2><p>Thank you for sharing your feedback.</p><button id="homeBtn">Back to home</button></div>`);$('#homeBtn').onclick=()=>{currentView='home';render()}}catch(e){showError('#err',e.message)}};
+}
+function adminLoginView(){shell(`<div class="card"><h2>Admin login</h2><p class="mu">Admin can view, download and delete reports and feedback.</p><label>Admin PIN</label><input id="pin" type="password" inputmode="numeric" maxlength="20" placeholder="Enter admin PIN"><p id="err" class="err"></p><button id="adminLoginBtn">Open admin dashboard</button><button class="alt" id="backBtn">Back</button></div>`);
+ $('#adminLoginBtn').onclick=async()=>{try{await post('/api/admin/login',{pin:$('#pin').value});isAdmin=true;currentView='admin';render()}catch(e){showError('#err',e.message)}};
+ $('#backBtn').onclick=()=>{currentView=currentUser?'home':'login';render()};
+}
+async function adminView(){
+ shell(`<div class="card"><h2>Admin dashboard</h2><p class="mu">Only admin access can view these records.</p><button id="downloadBtn">⬇ Download all reports & feedback (CSV)</button><button class="alt" id="refreshBtn">Refresh</button><button class="alt" id="logoutBtn">Logout admin</button><h3>Reported problems</h3><div id="reports">Loading reports…</div><h3>Feedback</h3><div id="feedback">Loading feedback…</div><p id="err" class="err"></p></div>`);
+ $('#downloadBtn').onclick=()=>{window.location.href='/api/admin/download.csv'};
+ $('#refreshBtn').onclick=adminView;
+ $('#logoutBtn').onclick=async()=>{await api('/api/logout',{method:'POST'});isAdmin=false;currentView='login';render()};
+ try{
+  const [rr,ff]=await Promise.all([post('/api/admin/reports',{}),post('/api/admin/feedback',{})]);
+  $('#reports').innerHTML=rr.items.length?rr.items.map(x=>`<div class="item"><b>#${x.id} · ${escapeHtml(x.area)}</b><p>${escapeHtml(x.problem)}</p><div class="mu">${escapeHtml(x.name)} · ${escapeHtml(x.phone)} · ${escapeHtml(x.created_at)} · Status: ${escapeHtml(x.status)}</div>${x.latitude!=null&&x.longitude!=null?`<p><a target="_blank" rel="noopener" href="https://maps.google.com/?q=${encodeURIComponent(x.latitude+','+x.longitude)}">Open location in Maps</a></p>`:'<p class="small">No location coordinates saved</p>'}${x.photo?`<p><img class="p" src="/uploads/${encodeURIComponent(x.photo)}" alt="Reported issue photo"></p><a class="btn alt" href="/api/admin/download-photo/${x.id}">Download photo</a>`:''}<button class="deleteReport" data-id="${x.id}">Delete report</button></div>`).join(''):'<p class="mu">No reports yet.</p>';
+  $('#feedback').innerHTML=ff.items.length?ff.items.map(x=>`<div class="item"><b>#${x.id} · ${escapeHtml(x.kind.replace('_',' '))}</b><p>${escapeHtml(x.message)}</p><div class="mu">${escapeHtml(x.name)} · ${escapeHtml(x.phone)} · ${escapeHtml(x.created_at)}</div><button class="deleteFeedback" data-id="${x.id}">Delete feedback</button></div>`).join(''):'<p class="mu">No feedback yet.</p>';
+  document.querySelectorAll('.deleteReport').forEach(b=>b.onclick=()=>deleteRecord('reports',b.dataset.id));
+  document.querySelectorAll('.deleteFeedback').forEach(b=>b.onclick=()=>deleteRecord('feedback',b.dataset.id));
+ }catch(e){showError('#err',e.message)}
+}
+async function deleteRecord(table,id){if(!confirm('Permanently delete this '+(table==='reports'?'report':'feedback')+'?'))return;try{await post('/api/admin/delete',{table,id});adminView()}catch(e){showError('#err',e.message)}}
+$('#lang').onchange=e=>{const lang=e.target.value;document.documentElement.lang=lang;/* Language selector retained to match supplied interface; main workflow labels are currently English. */};
+start();
+</script>
+</body></html>
